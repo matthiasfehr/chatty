@@ -5,6 +5,9 @@ import {Text, View, StyleSheet} from 'react-native';
 import {connect} from 'react-redux';
 import Groups from './screens/groups.screen';
 import Messages from './screens/messages.screen';
+import FinalizeGroup from './screens/finalize-group.screen';
+import GroupDetails from './screens/group-details.screen';
+import NewGroup from './screens/new-group.screen';
 
 const styles = StyleSheet.create({
     container: {
@@ -48,7 +51,10 @@ const MainScreenNavigator = TabNavigator({
 // Navigation stack for our entire application
 const AppNavigator = StackNavigator({
     Main: {screen: MainScreenNavigator},
-    Messages: {screen: Messages}
+    Messages: {screen: Messages},
+    GroupDetails: { screen: GroupDetails },
+    NewGroup: { screen: NewGroup },
+    FinalizeGroup: { screen: FinalizeGroup }
 });
 
 // reducer initialization code

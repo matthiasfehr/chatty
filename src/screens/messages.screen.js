@@ -1,10 +1,13 @@
-import {_} from 'lodash';
+import _ from 'lodash';
 import {
     ActivityIndicator,
     KeyboardAvoidingView,
     FlatList,
     StyleSheet,
     View,
+    Image,
+    Text,
+    TouchableOpacity,
 } from 'react-native';
 import PropTypes from 'prop-types';
 import React, {Component} from 'react';
@@ -14,6 +17,9 @@ import {graphql, compose} from 'react-apollo';
 import GROUP_QUERY from '../graphql/group.query';
 import MessageInput from '../components/message-input.component';
 import CREATE_MESSAGE_MUTATION from '../graphql/create-message.mutation';
+import update from 'immutability-helper';
+import moment from 'moment';
+import USER_QUERY from '../graphql/user.query';
 
 const styles = StyleSheet.create({
     container: {
@@ -25,6 +31,22 @@ const styles = StyleSheet.create({
     loading: {
         justifyContent: 'center',
     },
+    titleWrapper: {
+        alignItems: 'center',
+        position: 'absolute',
+        left: 0,
+        right: 0,
+    },
+    title: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    titleImage: {
+        marginRight: 6,
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+    },
 });
 
 function isDuplicateMessage(newMessage, existingMessages) {
@@ -33,12 +55,47 @@ function isDuplicateMessage(newMessage, existingMessages) {
 }
 
 class Messages extends Component {
+    static navigationOptions = ({navigation}) => {
+        const {state, navigate} = navigation;
+
+        const goToGroupDetails = navigate.bind(this, 'GroupDetails', {
+            id: state.params.groupId,
+            title: state.params.title,
+        });
+
+        return {
+            headerTitle: (
+                <TouchableOpacity
+                    style={styles.titleWrapper}
+                    onPress={goToGroupDetails}
+                >
+                    <View style={styles.title}>
+                        <Image
+                            style={styles.titleImage}
+                            source={{uri: 'https://facebook.github.io/react/img/logo_og.png'}}
+                        />
+                        <Text>{state.params.title}</Text>
+                    </View>
+                </TouchableOpacity>
+            ),
+        };
+    };
+
     constructor(props) {
         super(props);
+        const usernameColors = {};
+        if (props.group && props.group.users) {
+            props.group.users.forEach((user) => {
+                usernameColors[user.username] = randomColor();
+            });
+        }
         this.state = {
             usernameColors: {},
+            refreshing: false,
         };
+        this.renderItem = this.renderItem.bind(this);
         this.send = this.send.bind(this);
+        this.onEndReached = this.onEndReached.bind(this);
     }
 
     send(text) {
@@ -47,8 +104,21 @@ class Messages extends Component {
             userId: 1, // faking the user for now
             text,
         }).then(() => {
-            this.flatList.scrollToEnd({ animated: true });
+            this.flatList.scrollToIndex({index: 0, animated: true});
         });
+    }
+
+    onEndReached() {
+        if (!this.state.loadingMoreEntries) {
+            this.setState({
+                loadingMoreEntries: true,
+            });
+            this.props.loadMoreEntries().then(() => {
+                this.setState({
+                    loadingMoreEntries: false,
+                });
+            });
+        }
     }
 
     componentWillReceiveProps(nextProps) {
@@ -79,7 +149,7 @@ class Messages extends Component {
     render() {
         const {loading, group} = this.props;
         // render loading placeholder while we fetch messages
-        if (loading && !group) {
+        if (loading || !group) {
             return (
                 <View style={[styles.loading, styles.container]}>
                     <ActivityIndicator />
@@ -95,10 +165,14 @@ class Messages extends Component {
                 style={styles.container}
             >
                 <FlatList
-                    ref={(ref) => { this.flatList = ref; }}
-                    data={group.messages.slice().reverse()}
+                    ref={(ref) => {
+                        this.flatList = ref;
+                    }}
+                    inverted
+                    data={group.messages}
                     keyExtractor={this.keyExtractor}
                     renderItem={this.renderItem}
+                    onEndReached={this.onEndReached}
                 />
                 <MessageInput send={this.send}/>
             </KeyboardAvoidingView>
@@ -108,6 +182,7 @@ class Messages extends Component {
 Messages.propTypes = {
     createMessage: PropTypes.func,
     navigation: PropTypes.shape({
+        navigate: PropTypes.func,
         state: PropTypes.shape({
             params: PropTypes.shape({
                 groupId: PropTypes.number,
@@ -119,6 +194,7 @@ Messages.propTypes = {
         users: PropTypes.array,
     }),
     loading: PropTypes.bool,
+    loadMoreEntries: PropTypes.func,
 };
 const createMessageMutation = graphql(CREATE_MESSAGE_MUTATION, {
     props: ({mutate}) => ({
@@ -144,39 +220,69 @@ const createMessageMutation = graphql(CREATE_MESSAGE_MUTATION, {
                     },
                 },
                 update: (store, {data: {createMessage}}) => {
-                    // Read the data from our cache for this query.
-                    const data = store.readQuery({
-                        query: GROUP_QUERY,
+                    const userData = store.readQuery({
+                        query: USER_QUERY,
                         variables: {
-                            groupId,
+                            id: 1, // faking the user for now
                         },
                     });
-                    if (isDuplicateMessage(createMessage, data.group.messages)) {
-                        return data;
+                    // check whether mutation is latest msg and update cache
+                    const updatedGroup = _.find(userData.user.groups, { id: createMessage.groupId });
+                    if (!updatedGroup.messages.length ||
+                        moment(updatedGroup.messages[0].insertedAt).isBefore(moment(createMessage.insertedAt))) {
+                        // update the latest message
+                        updatedGroup.messages[0] = createMessage;
+                        // Write our data back to the cache.
+                        store.writeQuery({
+                            query: USER_QUERY,
+                            variables: {
+                                id: 1, // faking the user for now
+                            },
+                            data: userData,
+                        });
                     }
-                    // Add our message from the mutation to the end.
-                    data.group.messages.unshift(createMessage);
-                    // Write our data back to the cache.
-                    store.writeQuery({
-                        query: GROUP_QUERY,
-                        variables: {
-                            groupId,
-                        },
-                        data,
-                    });
                 },
             }),
     }),
 });
+
+const ITEMS_PER_PAGE = 10;
 const groupQuery = graphql(GROUP_QUERY, {
     options: ownProps => ({
         variables: {
             groupId: ownProps.navigation.state.params.groupId,
+            offset: 0,
+            limit: ITEMS_PER_PAGE,
         },
     }),
-    props: ({data: {loading, group}}) => ({
-        loading, group,
-    }),
+    props: ({ data: { fetchMore, loading, group } }) => ({
+        loading,
+        group,
+        loadMoreEntries() {
+            return fetchMore({
+                // query: ... (you can specify a different query.
+                // GROUP_QUERY is used by default)
+                variables: {
+                    // We are able to figure out offset because it matches
+                    // the current messages length
+                    offset: group.messages.length,
+                    limit: ITEMS_PER_PAGE,
+                },
+                updateQuery: (previousResult, {fetchMoreResult}) => {
+                    // we will make an extra call to check if no more entries
+                    if (!fetchMoreResult) {
+                        return previousResult;
+                    }
+                    // push results (older messages) to end of messages list
+                    return update(previousResult, {
+                        group: {
+                            messages: {$push: fetchMoreResult.group.messages},
+                        },
+                    });
+                },
+            });
+        },
+    })
 });
 export default compose(
     groupQuery,

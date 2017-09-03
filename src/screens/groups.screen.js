@@ -8,9 +8,14 @@ import {
     Text,
     TouchableHighlight,
     View,
+    Button,
+    Image,
 } from 'react-native';
 import {graphql, compose} from 'react-apollo';
+import moment from 'moment';
+import Icon from 'react-native-vector-icons/FontAwesome';
 import {USER_QUERY} from '../graphql/user.query';
+
 
 const styles = StyleSheet.create({
     container: {
@@ -35,12 +40,62 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         flex: 0.7,
     },
+    groupTextContainer: {
+        flex: 1,
+        flexDirection: 'column',
+        paddingLeft: 6,
+    },
+    groupText: {
+        color: '#8c8c8c',
+    },
+    groupImage: {
+        width: 54,
+        height: 54,
+        borderRadius: 27,
+    },
+    groupTitleContainer: {
+        flexDirection: 'row',
+    },
+    groupLastUpdated: {
+        flex: 0.3,
+        color: '#8c8c8c',
+        fontSize: 11,
+        textAlign: 'right',
+    },
+    groupUsername: {
+        paddingVertical: 4,
+    },
+    header: {
+        alignItems: 'flex-end',
+        padding: 6,
+        borderColor: '#eee',
+        borderBottomWidth: 1,
+    },
+    warning: {
+        textAlign: 'center',
+        padding: 12,
+    },
 });
-// create fake data to populate our FlatList
-const fakeData = () => _.times(100, i => ({
-    id: i,
-    name: `Group ${i}`,
-}));
+
+// format insertedAt with moment
+const formatInsertedAt = insertedAt => moment(insertedAt).calendar(null, {
+    sameDay: '[Today]',
+    nextDay: '[Tomorrow]',
+    nextWeek: 'dddd',
+    lastDay: '[Yesterday]',
+    lastWeek: 'dddd',
+    sameElse: 'DD/MM/YYYY',
+});
+
+const Header = ({onPress}) => (
+    <View style={styles.header}>
+        <Button title={'New Group'} onPress={onPress}/>
+    </View>
+);
+Header.propTypes = {
+    onPress: PropTypes.func.isRequired,
+};
+
 class Group extends Component {
 
     constructor(props) {
@@ -50,14 +105,40 @@ class Group extends Component {
     }
 
     render() {
-        const {id, name} = this.props.group;
+        const { id, name, messages } = this.props.group;
         return (
             <TouchableHighlight
                 key={id}
                 onPress={this.goToMessages}
             >
                 <View style={styles.groupContainer}>
-                    <Text style={styles.groupName}>{`${name}`}</Text>
+                    <Image
+                        style={styles.groupImage}
+                        source={{
+                            uri: 'https://facebook.github.io/react/img/logo_og.png'
+                        }}
+                    />
+                    <View style={styles.groupTextContainer}>
+                        <View style={styles.groupTitleContainer}>
+                            <Text style={styles.groupName}>{`${name}`}</Text>
+                            <Text style={styles.groupLastUpdated}>
+                                {messages.length ?
+                                    formatInsertedAt(messages[0].insertedAt) : ''}
+                            </Text>
+                        </View>
+                        <Text style={styles.groupUsername}>
+                            {messages.length ?
+                                `${messages[0].from.username}:` : ''}
+                        </Text>
+                        <Text style={styles.groupText} numberOfLines={1}>
+                            {messages.length ? messages[0].text : ''}
+                        </Text>
+                    </View>
+                    <Icon
+                        name="angle-right"
+                        size={24}
+                        color={'#8c8c8c'}
+                    />
                 </View>
             </TouchableHighlight>
         );
@@ -69,6 +150,7 @@ Group.propTypes = {
         id: PropTypes.number,
         name: PropTypes.string,
     }),
+    messages: PropTypes.array,
 };
 class Groups extends Component {
     static navigationOptions = {
@@ -78,6 +160,8 @@ class Groups extends Component {
     constructor(props) {
         super(props);
         this.goToMessages = this.goToMessages.bind(this);
+        this.goToNewGroup = this.goToNewGroup.bind(this);
+        this.onRefresh = this.onRefresh.bind(this);
     }
 
     keyExtractor = item => item.id;
@@ -90,8 +174,17 @@ class Groups extends Component {
         navigate('Messages', {groupId: group.id, title: group.name});
     }
 
+    goToNewGroup() {
+        const {navigate} = this.props.navigation;
+        navigate('NewGroup');
+    }
+
+    onRefresh() {
+        this.props.refetch();
+    }
+
     render() {
-        const {loading, user} = this.props;
+        const { loading, user, networkStatus } = this.props;
         // render loading placeholder while we fetch messages
         if (loading) {
             return (
@@ -101,13 +194,26 @@ class Groups extends Component {
             );
         }
 
+        if (user && !user.groups.length) {
+            return (
+                <View style={styles.container}>
+                    <Header onPress={this.goToNewGroup}/>
+                    <Text style={styles.warning}>{'You do not have any groups.'}</Text>
+                </View>
+            );
+        }
+
+        const groups = user ? user.groups : [];
         // render list of groups for user
         return (
             <View style={styles.container}>
                 <FlatList
-                    data={user.groups}
+                    data={groups}
                     keyExtractor={this.keyExtractor}
                     renderItem={this.renderItem}
+                    ListHeaderComponent={() => <Header onPress={this.goToNewGroup} />}
+                    onRefresh={this.onRefresh}
+                    refreshing={networkStatus === 4}
                 />
             </View>
         );
@@ -117,6 +223,8 @@ Groups.propTypes = {
     navigation: PropTypes.shape({
         navigate: PropTypes.func,
     }),
+    networkStatus: PropTypes.number,
+    refetch: PropTypes.func,
     loading: PropTypes.bool,
     user: PropTypes.shape({
         id: PropTypes.number.isRequired,
@@ -132,8 +240,8 @@ Groups.propTypes = {
 
 const userQuery = graphql(USER_QUERY, {
     options: (ownProps) => ({variables: {id: 1}}),
-    props: ({data: {loading, user}}) => ({
-        loading, user,
+    props: ({ data: { loading, networkStatus, refetch, user } }) => ({
+        loading, networkStatus, refetch, user,
     }),
 });
 export default userQuery(Groups);
